@@ -1,197 +1,122 @@
-module.exports = async function runBurnEnergy(page) {
-  // 🟧 FASHION ARENA
-  let arenaEnergy = 1;
+// stats.js
+// Script 2: Vote + Message from Google Sheet (Option A - Safe & Stable)
 
-  while (arenaEnergy > 0) {
+const SHEET_CSV_URL =
+  'https://docs.google.com/spreadsheets/d/e/2PACX-1vTEvXh5P_U89PiYbBh-yIB-jbFdBejWYEHTbLopxHo7yc4Gns77R4h4HkXMxUzFTOGaU9Jl5JimzB_A/pub?gid=0&single=true&output=csv';
+
+module.exports = async function runStatsExtractor(page) {
+  console.log('🚀 Starting Script 2: Vote + Message from Google Sheet');
+
+  /* -------------------------------------------
+     1️⃣ LOAD GOOGLE SHEET CSV
+  ------------------------------------------- */
+  console.log('📥 Fetching Google Sheet CSV...');
+  const csvText = await page.evaluate(async (url) => {
+    const res = await fetch(url);
+    return await res.text();
+  }, SHEET_CSV_URL);
+
+  const lines = csvText.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim());
+
+  const rows = lines.slice(1).map(line => {
+    const values = line.split(',').map(v => v.trim());
+    const obj = {};
+    headers.forEach((h, i) => (obj[h] = values[i]));
+    return obj;
+  });
+
+  console.log(`👭 Total ladies loaded: ${rows.length}`);
+  if (rows.length > 0) console.log('📋 Sample row:', rows[0]);
+
+  /* -------------------------------------------
+     2️⃣ PROCESS EACH LADY
+  ------------------------------------------- */
+  for (let i = 0; i < rows.length; i++) {
+    const { profileID, ladyID, ladyName } = rows[i];
+
+    console.log(`\n📄 Processing ${i + 1}/${rows.length}`);
+    console.log(`   👩 Name: ${ladyName}`);
+    console.log(`   🆔 Profile ID: ${profileID}`);
+    console.log(`   🎯 Lady ID: ${ladyID}`);
+
     try {
-      console.log("🟧 Navigating to BP...");
-      await page.goto('https://v3.g.ladypopular.com/beauty_pageant.php', { timeout: 60000 });
+      /* -------------------------------------------
+         3️⃣ OPEN PROFILE
+      ------------------------------------------- */
+      const profileUrl = `https://v3.g.ladypopular.com/profile.php?id=${profileID}`;
+      console.log(`🌐 Opening profile: ${profileUrl}`);
+      await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(4000);
 
-      for (let i = 1; i <= 3; i++) {
-        console.log(`🔄 Refreshing Fashion Arena page (${i}/3)...`);
-        await page.reload({ timeout: 30000 });
-        await page.waitForLoadState('domcontentloaded');
-      }
+      /* -------------------------------------------
+         4️⃣ SEND PODIUM VOTE (SAFE JSON PARSE)
+      ------------------------------------------- */
+      console.log('🗳️ Sending vote...');
+      const voteResult = await page.evaluate(async (ladyId) => {
+        const res = await fetch('/ajax.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: new URLSearchParams({
+            action: 'vote',
+            podiumType: 4,
+            ladyId: ladyId,
+            rating: 3
+          })
+        });
 
-      const energyText = await page.innerText(
-        '#header > div.wrapper > div > div.player-panel-middle > div.player-panel-energy > a.player-energy.player-arena-energy > span.player-energy-value > span'
-      );
-      arenaEnergy = parseInt(energyText.trim());
+        const text = await res.text();
+        if (!text) return { status: 0, message: 'Empty response' };
 
-      if (arenaEnergy <= 0 || isNaN(arenaEnergy)) {
-        console.log("✅ No energy left. Skipping Fashion Arena.");
-        break;
-      }
-
-      console.log(`🔋 You have ${arenaEnergy} energy. Starting duels...`);
-
-      for (let i = 0; i < arenaEnergy; i++) {
         try {
-          await page.evaluate(() => {
-            return fetch('https://v3.g.ladypopular.com/ajax/arena.php', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'X-Requested-With': 'XMLHttpRequest'
-              },
-              body: new URLSearchParams({ action: 'challenge' })
-            });
-          });
-          console.log(`⚔️ Duel ${i + 1}`);
-          await page.waitForTimeout(100);
-        } catch (e) {
-          console.log(`⚠️ Duel ${i + 1} failed: ${e.message}`);
-          throw e;
+          return JSON.parse(text);
+        } catch {
+          return { status: 0, message: 'Non-JSON response' };
         }
+      }, ladyID);
+
+      console.log(`🗳️ Vote response:`, voteResult);
+
+      if (voteResult.status !== 1) {
+        console.log('⚠️ Vote not accepted or already voted. Skipping message.');
+        continue;
       }
 
-      await page.reload({ timeout: 30000 });
-      await page.waitForLoadState('domcontentloaded');
-      const energyAfter = await page.innerText(
-        '#header > div.wrapper > div > div.player-panel-middle > div.player-panel-energy > a.player-energy.player-arena-energy > span.player-energy-value > span'
-      );
-      arenaEnergy = parseInt(energyAfter.trim());
+      /* -------------------------------------------
+         5️⃣ OPEN CHAT
+      ------------------------------------------- */
+      console.log('💬 Opening chat...');
+      await page.click('button.message-btn', { timeout: 10000 });
+      await page.waitForSelector('#msgArea', { timeout: 10000 });
 
-      if (arenaEnergy > 0) {
-        console.log(`🔁 Still ${arenaEnergy} energy left. Repeating duels.`);
-      } else {
-        console.log("✅ Finished all duels in Fashion Arena.");
-        break;
-      }
+      /* -------------------------------------------
+         6️⃣ SEND MESSAGE
+      ------------------------------------------- */
+      const messageText = 'visited you, love the look';
+
+      console.log('✍️ Sending message...');
+      await page.fill('#msgArea', messageText);
+      await page.waitForTimeout(500);
+      await page.click('#_sendMessageButton');
+
+      console.log(`✅ Message sent to ${ladyName}`);
+
+      /* -------------------------------------------
+         7️⃣ COOL-DOWN (ANTI-SPAM SAFETY)
+      ------------------------------------------- */
+      await page.waitForTimeout(5000);
 
     } catch (err) {
-      console.log("🔁 Error occurred. Refreshing page to retry Fashion Arena...");
-      await page.reload({ timeout: 60000 });
-      await page.waitForTimeout(5000);
-    }
-  }
-
-  // 💅 BEAUTY PAGEANT
-  async function getJudgeCycles() {
-    const energySelector = '#header > div.wrapper > div > div.player-panel-middle > div.player-panel-energy > a.player-energy.player-bp-energy > span.player-energy-value';
-    const blueEnergyText = await page.innerText(energySelector);
-    const blueEnergy = parseInt(blueEnergyText.trim());
-    const judgeCycles = Math.floor(blueEnergy / 2);
-    return { blueEnergy, judgeCycles };
-  }
-
-  async function performJudgeCycle() {
-    const timeoutMs = 10000;
-    const pollInterval = 500;
-    const startTime = Date.now();
-
-    while (Date.now() - startTime < timeoutMs) {
-      const duelRes = await page.evaluate(async () => {
-        const res = await fetch('/ajax/beauty_pageant.php', {
-          method: 'POST',
-          body: new URLSearchParams({ action: 'judgeDuel' }),
-          credentials: 'same-origin'
-        });
-        return await res.json();
+      console.log(`❌ Error processing ${ladyName}: ${err.message}`);
+      await page.screenshot({
+        path: `stats-error-${profileID}.png`,
+        fullPage: true
       });
-
-      const matchRegex = /<a id="ladyIdContainer-(\d+)-([^"]+)"/g;
-      const matches = [...duelRes.html.matchAll(matchRegex)];
-
-      if (duelRes.duel_id && matches.length === 2) {
-        const id1 = matches[0][1];
-        const gameId1 = matches[0][2];
-        const id2 = matches[1][1];
-        const gameId2 = matches[1][2];
-
-        const pickFirst = Math.random() < 0.5;
-        const winner = pickFirst ? id1 : id2;
-        const winnerGameId = pickFirst ? gameId1 : gameId2;
-
-        const voteRes = await page.evaluate(async ({ duelId, winnerId, winnerGameId }) => {
-          const res = await fetch('/ajax/beauty_pageant.php', {
-            method: 'POST',
-            body: new URLSearchParams({
-              action: 'chooseWinner',
-              duel_id: duelId,
-              winner_id: winnerId,
-              winner_game_id: winnerGameId
-            }),
-            credentials: 'same-origin'
-          });
-          return await res.json();
-        }, { duelId: duelRes.duel_id, winnerId: winner, winnerGameId });
-
-        console.log(`👑 Judged duel ${duelRes.duel_id} ✔️`);
-        return;
-      }
-
-      await page.waitForTimeout(pollInterval);
-    }
-
-    console.log('❌ Timeout: Could not get valid duel data in 10s. Skipping.');
-  }
-
-  console.log("🔷 Starting Beauty Pageant energy burn...");
-  while (true) {
-    await page.goto('https://v3.g.ladypopular.com/beauty_pageant.php', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000
-    });
-    await page.waitForTimeout(5000);
-
-    const { blueEnergy, judgeCycles } = await getJudgeCycles();
-    console.log(`🔷 You have ${blueEnergy} blue energy. Judge cycles: ${judgeCycles}`);
-
-    if (judgeCycles < 1) {
-      console.log("✅ No judge cycles left. Skipping Beauty Pageant judging.");
-      break;
-    }
-
-    for (let i = 0; i < judgeCycles; i++) {
-      try {
-        await performJudgeCycle();
-        await page.waitForTimeout(3000);
-      } catch (err) {
-        console.log(`⚠️ Judge cycle ${i + 1} failed: ${err.message}`);
-      }
     }
   }
 
-  // 🎟️ Compete with Tickets
-  console.log("🎟️ Checking ticket count to decide how many to use...");
-
-  const getTicketCount = async () => {
-    const ticketText = await page.innerText('.bp-pass-amount');
-    return parseInt(ticketText.trim());
-  };
-
-  let tickets = await getTicketCount();
-  console.log(`🎟️ You have ${tickets} tickets.`);
-
-  let ticketsToUse = tickets - 90;
-
-  if (ticketsToUse > 0) {
-    console.log(`🎯 Using ${ticketsToUse} ticket(s)...`);
-    while (ticketsToUse > 0) {
-      try {
-        console.log(`🧨 Using ticket ${tickets}... clicking compete button.`);
-        await page.click('#competeInDuel', { timeout: 5000 });
-        await page.waitForTimeout(6000);
-
-        await page.goto('https://v3.g.ladypopular.com/beauty_pageant.php', {
-          waitUntil: 'domcontentloaded',
-          timeout: 60000
-        });
-        await page.waitForTimeout(5000);
-
-        tickets = await getTicketCount();
-        ticketsToUse--;
-        console.log(`🎟️ Tickets remaining: ${tickets}. Tickets left to use: ${ticketsToUse}`);
-      } catch (e) {
-        console.log(`⚠️ Error using ticket: ${e.message}`);
-        await page.screenshot({ path: `bp-ticket-error-${tickets}.png`, fullPage: true });
-        break;
-      }
-    }
-
-    console.log("✅ Finished using excess tickets.");
-  } else {
-    console.log(`🚫 Tickets are ${tickets}. Not more than 90. Skipping.`);
-  }
+  console.log('🏁 Script 2 complete. All rows processed.');
 };
