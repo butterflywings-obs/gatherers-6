@@ -1,6 +1,6 @@
 // collectRewards.js
 
-module.exports = async function collectRewards(page) {
+module.exports = async function runStatsExtractor(page) {
   console.log("🚀 Starting reward collection sub-code");
 
   const request = page.request;
