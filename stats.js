@@ -1,190 +1,176 @@
-// runStatsExtractor
-/**
- * Collect Daily Rewards + Fashion Season Rewards
- * Phase 1: Detect available rewards
- * Phase 2: Collect them via POST
- */
-module.exports = async function runStatsExtractor(page) {
-  console.log("🎁 [BP] Starting reward collection sub-code");
+// collectRewards.js
+
+module.exports = async function collectRewards(page) {
+  console.log("🚀 Starting reward collection sub-code");
+
+  const request = page.request;
+
+  /* -------------------------------------------------------
+     CONSTANTS
+  ------------------------------------------------------- */
+  const QUESTS_ENDPOINT =
+    "https://v3.g.ladypopular.com/ajax/battlepass/quests.php";
+  const CHEST_ENDPOINT =
+    "https://v3.g.ladypopular.com/ajax/battlepass/chest.php";
+
+  const EXCLUDED_SEASON_ITEMS = new Set([25, 29]);
+
+  /* -------------------------------------------------------
+     PHASE 1 – FETCH POPUP DATA
+  ------------------------------------------------------- */
+  console.log("📡 Phase 1: Fetching daily quests popup");
+
+  let popupResponse;
+  try {
+    popupResponse = await request.get(
+      `${QUESTS_ENDPOINT}?type=getDailyQuestsPopup&page=myprofile`,
+      { headers: { "x-requested-with": "XMLHttpRequest" } }
+    );
+  } catch (err) {
+    console.error("❌ Failed to fetch popup:", err);
+    return;
+  }
+
+  const rawText = await popupResponse.text();
+  console.log("📥 Popup response received");
+
+  /* -------------------------------------------------------
+     PHASE 1A – TYPE 1 COLLECTION
+  ------------------------------------------------------- */
+  const reward_collections_1 = [];
 
   try {
-    // ─────────────────────────────────────────────
-    // PHASE 1 — OPEN POPUP & CAPTURE RESPONSE
-    // ─────────────────────────────────────────────
+    const json = JSON.parse(rawText);
 
-    console.log("📄 [BP] Navigating to profile page...");
-    await page.goto("https://v3.g.ladypopular.com/profile.php", {
-      waitUntil: "networkidle"
-    });
-
-    console.log("🕵️ [BP] Waiting for daily quests popup response...");
-
-    const responsePromise = page.waitForResponse(res =>
-      res.url().includes("/ajax/battlepass/quests.php") &&
-      res.request().method() === "GET" &&
-      res.url().includes("type=getDailyQuestsPopup")
-    );
-
-    // Trigger popup (same click user performs)
-    await page.click('[data-popup="daily-quests"]');
-
-    const response = await responsePromise;
-    const popupData = await response.json();
-
-    console.log("✅ [BP] Popup data received");
-
-    // ─────────────────────────────────────────────
-    // PHASE 1 — PARSE REWARDS
-    // ─────────────────────────────────────────────
-
-    const reward_collections_1 = [];
-    const reward_collections_2 = [];
-    const reward_collections_3 = [];
-
-    // ───── TYPE 1 (Pure JSON quests) ─────
-    if (Array.isArray(popupData.dailyQuests)) {
-      for (const quest of popupData.dailyQuests) {
-        if (quest.status === "4") {
-          reward_collections_1.push(quest.id);
+    if (Array.isArray(json?.quests)) {
+      for (const q of json.quests) {
+        if (String(q.status) === "4") {
+          reward_collections_1.push(q.id);
         }
       }
     }
-
-    console.log(`🟦 [BP] Type 1 rewards found: ${reward_collections_1.length}`);
-
-    // ───── TYPE 2 (HTML daily chests) ─────
-    if (typeof popupData.dailyChests === "string") {
-      const dailyChestHtml = popupData.dailyChests;
-      const dailyChestMatches = [...dailyChestHtml.matchAll(
-        /data-quest="(\d+)"[^>]*data-chest-index="(\d+)"[^>]*class="[^"]*daily-chest semi-opened[^"]*"/g
-      )];
-
-      for (const match of dailyChestMatches) {
-        reward_collections_2.push({
-          quest_id: Number(match[1]),
-          chest_id: Number(match[2]) + 1
-        });
-      }
-    }
-
-    console.log(`🟩 [BP] Type 2 rewards found: ${reward_collections_2.length}`);
-
-    // ───── TYPE 3 (Fashion season rewards) ─────
-    if (typeof popupData.seasonProgress === "string") {
-      const seasonHtml = popupData.seasonProgress;
-
-      const liMatches = [...seasonHtml.matchAll(
-        /<li[^>]*class="([^"]*(level-reached|last-reached)[^"]*)"[^>]*>([\s\S]*?)<\/li>/g
-      )];
-
-      for (const li of liMatches) {
-        const liContent = li[3];
-
-        const levelMatch = liContent.match(/<span class="level">(\d+)<\/span>/);
-        if (!levelMatch) continue;
-
-        const levelNumber = Number(levelMatch[1]);
-
-        // Explicit exclusions
-        if (levelNumber === 25 || levelNumber === 29) continue;
-
-        // Right chest only
-        const rightChestMatch = liContent.match(
-          /<div[^>]*class="[^"]*chest-right[^"]*c(\d+-\d+)[^"]*"[^>]*data-chest-id="(\d+)"/
-        );
-
-        if (!rightChestMatch) continue;
-
-        reward_collections_3.push({
-          chest_css_class: `c${rightChestMatch[1]}`,
-          chest_id: Number(rightChestMatch[2])
-        });
-      }
-    }
-
-    console.log(`🟨 [BP] Type 3 rewards found: ${reward_collections_3.length}`);
-
-    // ─────────────────────────────────────────────
-    // PHASE 2 — COLLECT REWARDS
-    // ─────────────────────────────────────────────
-
-    // ───── TYPE 1 COLLECTION ─────
-    for (const quest_id of reward_collections_1) {
-      console.log(`🎯 [BP] Collecting Type 1 quest ${quest_id}`);
-
-      const res = await page.request.post(
-        "https://v3.g.ladypopular.com/ajax/battlepass/quests.php",
-        {
-          form: {
-            type: "giveDailyQuestReward",
-            quest_id,
-            chest_id: -1
-          }
-        }
-      );
-
-      if (!res.ok()) {
-        console.error(`❌ [BP] Type 1 failed for quest ${quest_id}`);
-        return false;
-      }
-    }
-
-    // ───── TYPE 2 COLLECTION ─────
-    for (const item of reward_collections_2) {
-      console.log(
-        `🎯 [BP] Collecting Type 2 quest ${item.quest_id}, chest ${item.chest_id}`
-      );
-
-      const res = await page.request.post(
-        "https://v3.g.ladypopular.com/ajax/battlepass/quests.php",
-        {
-          form: {
-            type: "giveDailyQuestReward",
-            quest_id: item.quest_id,
-            chest_id: item.chest_id
-          }
-        }
-      );
-
-      if (!res.ok()) {
-        console.error(
-          `❌ [BP] Type 2 failed for quest ${item.quest_id}`
-        );
-        return false;
-      }
-    }
-
-    // ───── TYPE 3 COLLECTION ─────
-    for (const chest of reward_collections_3) {
-      console.log(
-        `🎯 [BP] Collecting Type 3 chest ${chest.chest_id} (${chest.chest_css_class})`
-      );
-
-      const res = await page.request.post(
-        "https://v3.g.ladypopular.com/ajax/battlepass/chest.php",
-        {
-          form: {
-            chest_id: chest.chest_id,
-            chest_css_class: chest.chest_css_class,
-            previousSeason: 0
-          }
-        }
-      );
-
-      if (!res.ok()) {
-        console.error(
-          `❌ [BP] Type 3 failed for chest ${chest.chest_id}`
-        );
-        return false;
-      }
-    }
-
-    console.log("🎉 [BP] All available rewards collected successfully");
-    return true;
-
-  } catch (err) {
-    console.error("🔥 [BP] Fatal error in reward collection sub-code");
-    console.error(err);
-    return false;
+  } catch {
+    console.log("⚠️ Type 1 parsing: JSON section not found or malformed");
   }
+
+  console.log(
+    `🎯 Type 1 rewards found: ${reward_collections_1.join(", ") || "none"}`
+  );
+
+  /* -------------------------------------------------------
+     PHASE 1B – TYPE 2 COLLECTION
+  ------------------------------------------------------- */
+  const reward_collections_2 = [];
+
+  const chestRegex =
+    /<div class="daily-chest semi-opened"[\s\S]*?data-quest="(\d+)"[\s\S]*?data-chest-index="(\d+)"/g;
+
+  let chestMatch;
+  while ((chestMatch = chestRegex.exec(rawText)) !== null) {
+    const quest_id = chestMatch[1];
+    const chest_id = Number(chestMatch[2]) + 1;
+
+    reward_collections_2.push({ quest_id, chest_id });
+  }
+
+  console.log(
+    `🎯 Type 2 rewards found: ${
+      reward_collections_2.length
+        ? reward_collections_2
+            .map(r => `${r.quest_id}:${r.chest_id}`)
+            .join(", ")
+        : "none"
+    }`
+  );
+
+  /* -------------------------------------------------------
+     PHASE 1C – TYPE 3 COLLECTION
+  ------------------------------------------------------- */
+  const reward_collections_3 = [];
+
+  const liRegex =
+    /<li class="(level-reached last-reached|level-reached)[\s\S]*?data-active-chest-type="(\d+)"[\s\S]*?<\/li>/g;
+
+  let liMatch;
+  while ((liMatch = liRegex.exec(rawText)) !== null) {
+    const itemNumber = Number(liMatch[2]);
+
+    if (EXCLUDED_SEASON_ITEMS.has(itemNumber)) {
+      console.log(`⏭️ Skipping season item ${itemNumber}`);
+      continue;
+    }
+
+    const liBlock = liMatch[0];
+
+    const rightChestRegex =
+      /right-col reward-chest[\s\S]*?claimSeasonChest\(this, '(\d+)', 0, '([^']+)'\)/;
+
+    const rightMatch = rightChestRegex.exec(liBlock);
+    if (!rightMatch) continue;
+
+    reward_collections_3.push({
+      chest_id: rightMatch[1],
+      chest_css_class: rightMatch[2],
+      item: itemNumber
+    });
+  }
+
+  console.log(
+    `🎯 Type 3 rewards found: ${
+      reward_collections_3.length
+        ? reward_collections_3
+            .map(r => `${r.chest_id}:${r.chest_css_class}`)
+            .join(", ")
+        : "none"
+    }`
+  );
+
+  /* -------------------------------------------------------
+     PHASE 2 – COLLECT REWARDS
+  ------------------------------------------------------- */
+  console.log("⚡ Phase 2: Collecting rewards");
+
+  // TYPE 1
+  for (const quest_id of reward_collections_1) {
+    console.log(`🎁 Collecting Type 1 quest ${quest_id}`);
+    request.post(QUESTS_ENDPOINT, {
+      headers: { "x-requested-with": "XMLHttpRequest" },
+      form: {
+        type: "giveDailyQuestReward",
+        quest_id,
+        chest_id: "-1"
+      }
+    }).catch(() => {});
+  }
+
+  // TYPE 2
+  for (const { quest_id, chest_id } of reward_collections_2) {
+    console.log(`🎁 Collecting Type 2 quest ${quest_id}, chest ${chest_id}`);
+    request.post(QUESTS_ENDPOINT, {
+      headers: { "x-requested-with": "XMLHttpRequest" },
+      form: {
+        type: "giveDailyQuestReward",
+        quest_id,
+        chest_id
+      }
+    }).catch(() => {});
+  }
+
+  // TYPE 3
+  for (const { chest_id, chest_css_class, item } of reward_collections_3) {
+    console.log(
+      `🎁 Collecting Type 3 chest ${chest_id} (${chest_css_class}) [item ${item}]`
+    );
+    request.post(CHEST_ENDPOINT, {
+      headers: { "x-requested-with": "XMLHttpRequest" },
+      form: {
+        action: "chestClaim",
+        chest_id,
+        previousSeason: "0",
+        chest_css_class
+      }
+    }).catch(() => {});
+  }
+
+  console.log("✅ Reward collection sub-code finished");
 };
