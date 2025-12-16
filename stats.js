@@ -1,6 +1,4 @@
 // stats.js
-const fetch = require('node-fetch');
-
 module.exports = async function runStatsExtractor(page) {
   console.log("🚀 Starting Script 2: Vote + Message from Google Sheet");
 
